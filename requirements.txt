@@ -1,0 +1,13 @@
+# Core
+streamlit>=1.35.0
+openai-whisper
+soundfile
+python-dotenv
+
+# Speaker diarization
+# pyannote.audio needs a free HuggingFace token + one-time license acceptance
+# (see README). huggingface_hub is pinned <0.26 because pyannote 3.1 calls
+# hf_hub_download() with the older `use_auth_token` argument, which was removed
+# in huggingface_hub 0.26+. Pinning keeps the two compatible.
+pyannote.audio>=3.1
+huggingface_hub<0.26

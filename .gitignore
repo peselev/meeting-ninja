@@ -1,0 +1,29 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+venv/
+
+# App state & secrets
+*.sqlite
+*.sqlite-wal
+*.sqlite-shm
+.env
+
+# Streamlit
+.streamlit/secrets.toml
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Local recordings / outputs (never commit media or transcripts)
+audio/
+transcripts/
+incoming/
+*.mov
+*.mp4
+*.mp3
+*.wav
+*.m4a
