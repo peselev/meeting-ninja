@@ -25,7 +25,7 @@ The labeled transcript is plain text with timestamps and speaker names, ready to
 
 ## Why
 
-I built this to process my own meeting and interview recordings without sending audio to a cloud service. Off-the-shelf tools (Zoom, Otter, Chorus) do transcription and speaker detection, but only for calls *they* host. This works on any local `.mov` / `.mp4` / `.mp3` / `.wav` file — including screen recordings — and keeps everything private.
+I built this to process my own meeting and recordings without sending audio to a cloud service. Off-the-shelf tools (Zoom, Otter, Chorus) do transcription and speaker detection, but only for calls *they* host. This works on any local `.mov` / `.mp4` / `.mp3` / `.wav` file — including screen recordings — and keeps everything private.
 
 It's also a small study in stitching together a fragile ML dependency stack (Whisper + pyannote + torch) into something reliable, with structural fixes for the version-incompatibility issues those libraries are prone to.
 
