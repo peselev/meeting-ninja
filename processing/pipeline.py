@@ -16,7 +16,7 @@ from processing.diarize import (
     merge_diarization_with_segments, collect_speaker_samples,
 )
 from processing.job_router import route_to_job_folder
-from utils.media_info import get_source_type
+from utils.media_info import get_source_type, SOUNDFILE_NATIVE
 
 
 # Each message: {"file_id": int, "stage": str, "done": bool, "error": str|None}
@@ -45,14 +45,24 @@ def _process_file(file_id: int, model_name: str, home_folder: str,
     try:
         # ── Step 1: Audio extraction ────────────────────────────────────────
         source_type = record["source_type"]
-        # Extract if it's video, OR if an offset is set (so audio gets trimmed too)
-        if source_type == "video" or (offset_sec and offset_sec > 0):
+        # Transcode to a clean 16kHz mono WAV when the source is video, when an
+        # offset needs trimming, OR when the format isn't directly readable by
+        # soundfile (which diarization uses). The last case covers .amr/.mp3/
+        # .m4a/.aac: Whisper would decode them via ffmpeg, but pyannote's
+        # soundfile loader can't, so they'd silently fail diarization otherwise.
+        suffix = Path(source_path).suffix.lower()
+        needs_extract = (
+            source_type == "video"
+            or (offset_sec and offset_sec > 0)
+            or suffix not in SOUNDFILE_NATIVE
+        )
+        if needs_extract:
             _emit(file_id, "extracting")
             db.update_file(file_id, status="extracting")
             audio_path = extract_audio(source_path, home_folder, offset_sec)
             db.update_file(file_id, audio_path=audio_path)
         else:
-            audio_path = source_path  # already audio, no offset, use directly
+            audio_path = source_path  # already a soundfile-native WAV/FLAC/OGG
 
         # ── Step 2: Transcription ────────────────────────────────────────────
         _emit(file_id, "transcribing")

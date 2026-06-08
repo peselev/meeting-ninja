@@ -6,8 +6,14 @@ from pathlib import Path
 from datetime import datetime
 
 VIDEO_EXTENSIONS = {".mov", ".mp4", ".mkv", ".avi", ".webm", ".m4v"}
-AUDIO_EXTENSIONS = {".mp3", ".wav", ".m4a", ".aac", ".ogg", ".flac"}
+AUDIO_EXTENSIONS = {".mp3", ".wav", ".m4a", ".aac", ".ogg", ".flac", ".amr"}
 ALL_EXTENSIONS = VIDEO_EXTENSIONS | AUDIO_EXTENSIONS
+
+# Formats libsndfile (soundfile) decodes directly. Diarization loads audio via
+# soundfile to bypass torchaudio's FFmpeg backend, so anything NOT in this set
+# must be transcoded to WAV via ffmpeg first (see pipeline extraction gate).
+# AMR in particular has no libsndfile support; mp3/m4a/aac are unreliable too.
+SOUNDFILE_NATIVE = {".wav", ".flac", ".ogg", ".aiff", ".aif"}
 
 
 def check_ffmpeg() -> tuple[bool, bool]:

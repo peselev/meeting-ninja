@@ -25,7 +25,7 @@ The labeled transcript is plain text with timestamps and speaker names, ready to
 
 ## Why
 
-I built this to process my own meeting recordings without sending audio to a cloud service. Off-the-shelf tools (Zoom, Otter, Chorus) do transcription and speaker detection, but only for calls *they* host. This works on any local `.mov` / `.mp4` / `.mp3` / `.wav` file — including screen recordings — and keeps everything private.
+I built this to process my own meeting recordings without sending audio to a cloud service. Off-the-shelf tools (Zoom, Otter, Chorus) do transcription and speaker detection, but only for calls *they* host. This works on any local video (`.mov`, `.mp4`, `.mkv`, …) or audio (`.mp3`, `.wav`, `.m4a`, `.amr`, …) file — including screen recordings and phone voice memos — and keeps everything private.
 
 It's also a small study in stitching together a fragile ML dependency stack (Whisper + pyannote + torch) into something reliable, with structural fixes for the version-incompatibility issues those libraries are prone to.
 
@@ -151,6 +151,7 @@ Transcription and diarization run in background threads so the UI stays responsi
 ## Notes & limitations
 
 - Diarization is slow on CPU. A 35-minute recording takes a few minutes. There's no GPU acceleration wired in.
+- Non-WAV/FLAC/OGG sources (e.g. `.mp3`, `.m4a`, `.amr`) are transcoded to 16 kHz mono WAV via ffmpeg before processing, since diarization reads audio through soundfile, which can't decode them directly. AMR-NB is an 8 kHz narrowband speech codec — it transcribes fine, but accuracy trails wideband sources. Decoding `.amr` needs ffmpeg's `amrnb`/`amrwb` decoders, which ship with standard builds (`brew install ffmpeg`); verify with `ffmpeg -decoders | grep amr`.
 - The dependency stack (torch 2.6 + pyannote) has known incompatibilities; this repo includes the workarounds (forcing `weights_only=False`, bypassing torchaudio's ffmpeg backend via soundfile, version-proofing the HF auth path).
 - Analysis (notes, summaries) is intentionally *not* built in — the labeled transcript is designed to be pasted into the LLM of your choice.
 
