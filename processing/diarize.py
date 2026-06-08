@@ -63,9 +63,7 @@ def diarize(audio_path: str, hf_token: str) -> list[dict]:
     except Exception as e:
         log.debug("torch compatibility shim skipped: %s", e)
 
-    # Authenticate once via huggingface_hub.login (writes token to cache),
-    # then load the pipeline with NO token argument — this avoids the
-    # use_auth_token / token kwarg incompatibility across versions entirely.
+    # Authenticate once via huggingface_hub.login (writes token to cache).
     if hf_token:
         try:
             from huggingface_hub import login
@@ -74,17 +72,35 @@ def diarize(audio_path: str, hf_token: str) -> list[dict]:
         except Exception as e:
             log.warning("huggingface_hub.login failed (%s); trying anyway.", e)
 
-    pipeline = Pipeline.from_pretrained("pyannote/speaker-diarization-3.1")
+    # Try the current community-1 pipeline (pyannote 4.x) first, then fall back
+    # to the legacy 3.1 pipeline. Pass token= when available (4.x accepts it).
+    pipeline = None
+    last_err = None
+    for model_name in ("pyannote/speaker-diarization-community-1",
+                       "pyannote/speaker-diarization-3.1"):
+        for kwargs in ({"token": hf_token} if hf_token else {}, {}):
+            try:
+                pipeline = Pipeline.from_pretrained(model_name, **kwargs)
+                if pipeline is not None:
+                    log.debug("Loaded pipeline: %s", model_name)
+                    break
+            except TypeError as e:
+                last_err = e  # kwarg mismatch — try next form
+                continue
+            except Exception as e:
+                last_err = e
+                break  # different error — try next model
+        if pipeline is not None:
+            break
 
-    # pyannote returns None (instead of raising) when the model can't be
-    # loaded — usually means the gated-model license wasn't accepted.
     if pipeline is None:
         raise RuntimeError(
-            "pyannote returned no pipeline. Most likely the model license "
-            "wasn't accepted. Visit and click 'Agree' on:\n"
+            "Could not load any pyannote pipeline. Most likely the model "
+            "license wasn't accepted. Visit and click 'Agree' on the model "
+            "page for whichever you're using:\n"
+            "  https://huggingface.co/pyannote/speaker-diarization-community-1\n"
             "  https://huggingface.co/pyannote/speaker-diarization-3.1\n"
-            "  https://huggingface.co/pyannote/segmentation-3.0\n"
-            "then retry."
+            f"Last error: {last_err}"
         )
 
     # Feed pyannote an in-memory waveform loaded via soundfile, bypassing
@@ -120,13 +136,27 @@ def diarize(audio_path: str, hf_token: str) -> list[dict]:
         log.debug("soundfile path failed (%s); falling back to file path.", e)
         diarization = _run(audio_path)
 
+    # Extract speaker turns, supporting both APIs:
+    #  - pyannote 4.x: result has .speaker_diarization, iterated as (turn, speaker)
+    #  - pyannote 3.x: result is an Annotation, use .itertracks(yield_label=True)
     turns = []
-    for turn, _, speaker in diarization.itertracks(yield_label=True):
-        turns.append({
-            "start_sec": turn.start,
-            "end_sec":   turn.end,
-            "label":     speaker,
-        })
+    annotation = getattr(diarization, "speaker_diarization", None)
+    if annotation is not None:
+        # 4.x: iterate (turn, speaker); also supports itertracks for safety
+        try:
+            for turn, speaker in annotation:
+                turns.append({"start_sec": turn.start, "end_sec": turn.end,
+                              "label": str(speaker)})
+        except (TypeError, ValueError):
+            for turn, _, speaker in annotation.itertracks(yield_label=True):
+                turns.append({"start_sec": turn.start, "end_sec": turn.end,
+                              "label": str(speaker)})
+    else:
+        # 3.x: the result itself is the Annotation
+        for turn, _, speaker in diarization.itertracks(yield_label=True):
+            turns.append({"start_sec": turn.start, "end_sec": turn.end,
+                          "label": str(speaker)})
+
     return sorted(turns, key=lambda t: t["start_sec"])
 
 

@@ -4,10 +4,12 @@ openai-whisper
 soundfile
 python-dotenv
 
-# Speaker diarization
-# pyannote.audio needs a free HuggingFace token + one-time license acceptance
-# (see README). huggingface_hub is pinned <0.26 because pyannote 3.1 calls
-# hf_hub_download() with the older `use_auth_token` argument, which was removed
-# in huggingface_hub 0.26+. Pinning keeps the two compatible.
-pyannote.audio>=3.1
-huggingface_hub<0.26
+# Speaker diarization (optional — needs a free HuggingFace token + one-time
+# license acceptance; see README).
+#
+# pyannote.audio 4.x uses FFmpeg via torchcodec instead of the old torchaudio
+# backend APIs (AudioMetaData, list_audio_backends, set_audio_backend) that
+# were removed in torchaudio 2.2+. This means it works with a current torch
+# stack — no version pinning gymnastics required. Earlier 3.x releases break
+# on modern torchaudio, so 4.0.1+ is the floor.
+pyannote.audio>=4.0.1
