@@ -2,8 +2,8 @@ from __future__ import annotations
 from pathlib import Path
 from datetime import datetime
 
-from db import client as db
-from utils.media_info import get_source_type, get_media_info, ALL_EXTENSIONS
+from meeting_ninja.db import client as db
+from meeting_ninja.utils.media_info import get_source_type, get_media_info, ALL_EXTENSIONS
 
 # Folders the app creates itself — never scan these for "new" recordings
 EXCLUDED_DIRNAMES = {"audio", "transcripts", "incoming"}

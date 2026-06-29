@@ -3,7 +3,7 @@ quiet.py — suppress the wall of harmless third-party warnings/noise that
 otherwise makes it impossible to tell "working" from "broken".
 
 Import this FIRST, before torch / torchaudio / pyannote / whisper, e.g.:
-    import utils.quiet  # noqa: F401  (must be first import)
+    import meeting_ninja.utils.quiet  # noqa: F401  (must be first import)
 
 What it silences (all confirmed harmless for our use):
   - torchaudio / torio FFmpeg-extension load failures (we use soundfile instead)

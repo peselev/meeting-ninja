@@ -1,0 +1,40 @@
+[build-system]
+requires = ["setuptools>=64"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "meeting-ninja"
+version = "0.1.0"
+description = "Local meeting transcription with speaker diarization and a scriptable, JSON-emitting CLI."
+readme = "README.md"
+requires-python = ">=3.9"
+license = { text = "MIT" }
+authors = [{ name = "Konstantin Peselev" }]
+keywords = ["whisper", "pyannote", "transcription", "diarization", "meetings"]
+dependencies = [
+    "openai-whisper",
+    "soundfile",
+    "python-dotenv",
+]
+
+[project.optional-dependencies]
+# Speaker diarization is optional: it needs a free HuggingFace token and a
+# one-time model-license click (see README). Without it the tool still
+# transcribes and assigns everything to a single speaker to label manually.
+diarization = ["pyannote.audio>=4.0.1"]
+# The legacy Streamlit UI (being replaced by the FastAPI + React UI). Only
+# needed if you run `streamlit run app.py`.
+ui = ["streamlit>=1.35.0"]
+
+[project.scripts]
+meeting-ninja = "meeting_ninja.cli:main"
+
+[project.urls]
+Homepage = "https://github.com/peselev/meeting-ninja"
+Repository = "https://github.com/peselev/meeting-ninja"
+
+[tool.setuptools.packages.find]
+include = ["meeting_ninja*"]
+
+[tool.setuptools.package-data]
+"meeting_ninja.db" = ["*.sql"]

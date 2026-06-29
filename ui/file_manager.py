@@ -4,13 +4,13 @@ from datetime import datetime
 from pathlib import Path
 import time
 
-from db import client as db
-from utils.media_info import (
+from meeting_ninja.db import client as db
+from meeting_ninja.utils.media_info import (
     get_source_type, get_media_info, format_duration, ALL_EXTENSIONS
 )
-from processing.pipeline import run_pipeline, get_progress_queue
-from processing.transcribe import WHISPER_MODELS
-from processing.scanner import scan_home_folder
+from meeting_ninja.processing.pipeline import run_pipeline, get_progress_queue
+from meeting_ninja.processing.transcribe import WHISPER_MODELS
+from meeting_ninja.processing.scanner import scan_home_folder
 
 
 STATUS_EMOJI = {

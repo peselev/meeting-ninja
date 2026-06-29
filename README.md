@@ -41,14 +41,29 @@ It's also a small study in stitching together a fragile ML dependency stack (Whi
 
 ## Setup
 
+### Install as a command (recommended)
+
 ```bash
-git clone https://github.com/<your-username>/meeting-ninja.git
+git clone https://github.com/peselev/meeting-ninja.git
+cd meeting-ninja
+
+pipx install .                 # installs the `meeting-ninja` command
+pipx install '.[diarization]'  # same, plus pyannote for speaker diarization
+```
+
+This puts a `meeting-ninja` command on your PATH. To reinstall after pulling
+changes, run `pipx uninstall meeting-ninja` then `pipx install .`.
+
+### Or run from a virtualenv (for the Streamlit UI / development)
+
+```bash
+git clone https://github.com/peselev/meeting-ninja.git
 cd meeting-ninja
 
 python3 -m venv .venv
 source .venv/bin/activate          # Windows: .venv\Scripts\activate
 
-pip install -r requirements.txt
+pip install -e '.[ui,diarization]'
 ```
 
 ### Optional: speaker diarization
@@ -80,12 +95,13 @@ Opens at http://localhost:8501. On first run, set your **Home folder** in the Se
 
 ## Running headless (CLI)
 
-The CLI does the same pipeline, synchronously, with verbose logging — handy for scripting or batch use.
+The CLI runs the same pipeline, synchronously, with verbose logging on stderr.
+Handy for scripting, batch use, and calling from agents like Claude Code.
 
 **Process a file:**
 
 ```bash
-python cli.py --file "team-sync.mov" \
+meeting-ninja --file "team-sync.mov" \
   --offset 30 \
   --model medium \
   --language en \
@@ -96,23 +112,50 @@ python cli.py --file "team-sync.mov" \
 Skip diarization for casual recordings:
 
 ```bash
-python cli.py --file "casual-call.mov" --no-diarize
+meeting-ninja --file "casual-call.mov" --no-diarize
 ```
 
 **Label speakers** for an already-processed file:
 
 ```bash
 # List detected speakers with sample excerpts
-python cli.py label --file "team-sync.mov" --list
+meeting-ninja label --file "team-sync.mov" --list
 
 # Assign names directly
-python cli.py label --file "team-sync.mov" \
+meeting-ninja label --file "team-sync.mov" \
   --speaker SPEAKER_00=Alex \
   --speaker SPEAKER_01=Jordan
 
 # Or label interactively (shows excerpts, prompts for each name)
-python cli.py label --file "team-sync.mov" --interactive
+meeting-ninja label --file "team-sync.mov" --interactive
 ```
+
+**Machine-readable output (`--json`):** add `--json` to any `process` or
+`label` command and the tool prints exactly one JSON object to stdout, with all
+human logs on stderr. This is the contract for scripting and agents.
+
+```bash
+meeting-ninja --file "team-sync.mov" --json
+```
+
+```json
+{
+  "ok": true,
+  "command": "process",
+  "file_id": 12,
+  "source_path": "/abs/path/team-sync.mov",
+  "status": "done",
+  "transcript_txt_path": "/.../transcripts/team-sync.txt",
+  "transcript_json_path": "/.../transcripts/team-sync.json",
+  "diarized": true,
+  "speakers": [{ "label": "SPEAKER_00", "display_name": null, "sample": "…" }],
+  "destination_copy": null,
+  "error": null
+}
+```
+
+On failure the object has `"ok": false`, an `"error"` string, and a non-zero
+exit code, so callers can branch on either.
 
 ---
 
@@ -137,12 +180,11 @@ State (file list, statuses, speaker labels) lives in a local SQLite DB at `~/.me
 
 | Layer | What |
 |---|---|
-| `app.py` | Streamlit entry point; sidebar settings + main view |
-| `cli.py` | Headless driver with `process` and `label` subcommands |
-| `db/` | SQLite schema + thin client |
-| `processing/` | ffmpeg extraction, Whisper transcription, pyannote diarization + merge, transcript labeling, destination routing, threaded pipeline orchestrator |
-| `ui/` | File manager, speaker labeling, settings screens |
-| `utils/` | Media probing, warning suppression |
+| `meeting_ninja/cli.py` | Headless driver with `process` and `label` subcommands; `--json` output. Entry point for the `meeting-ninja` command. |
+| `meeting_ninja/db/` | SQLite schema + thin client |
+| `meeting_ninja/processing/` | ffmpeg extraction, Whisper transcription, pyannote diarization + merge, transcript labeling, destination routing, threaded pipeline orchestrator |
+| `meeting_ninja/utils/` | Media probing, warning suppression |
+| `app.py`, `ui/` | Legacy Streamlit UI (being replaced by a FastAPI + React UI) |
 
 Transcription and diarization run in background threads so the UI stays responsive. The diarization step shows a live progress bar (it's CPU-heavy: budget a few minutes for a long recording).
 

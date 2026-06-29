@@ -1,6 +1,6 @@
 from __future__ import annotations
-from db import client as db
-from utils.media_info import format_duration
+from meeting_ninja.db import client as db
+from meeting_ninja.utils.media_info import format_duration
 
 
 def write_labeled_transcript(file_id: int) -> str | None:

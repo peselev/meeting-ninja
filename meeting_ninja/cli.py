@@ -18,23 +18,24 @@ The --file argument can be:
     - just a filename (searched recursively under the home folder)
 """
 from __future__ import annotations
-import utils.quiet  # noqa: F401  — MUST be imported before torch/pyannote/whisper
+import meeting_ninja.utils.quiet  # noqa: F401  — MUST be imported before torch/pyannote/whisper
 import argparse
+import json as _json_mod
 import logging
 import sys
 from datetime import datetime
 from pathlib import Path
 
-from db import client as db
-from db.client import init_db
-from utils.media_info import get_source_type, get_media_info, check_ffmpeg
-from processing.extract_audio import extract_audio
-from processing.transcribe import transcribe, load_segments_from_json, WHISPER_MODELS
-from processing.diarize import (
+from meeting_ninja.db import client as db
+from meeting_ninja.db.client import init_db
+from meeting_ninja.utils.media_info import get_source_type, get_media_info, check_ffmpeg
+from meeting_ninja.processing.extract_audio import extract_audio
+from meeting_ninja.processing.transcribe import transcribe, load_segments_from_json, WHISPER_MODELS
+from meeting_ninja.processing.diarize import (
     is_pyannote_available, diarize,
     merge_diarization_with_segments, collect_speaker_samples,
 )
-from processing.job_router import route_to_job_folder
+from meeting_ninja.processing.job_router import route_to_job_folder
 
 
 log = logging.getLogger("cli")
@@ -45,14 +46,43 @@ _OUR_LOGGERS = ("cli", "diarize", "pipeline")
 
 def _setup_logging(verbose: bool):
     # Root stays at INFO so dependency noise we didn't explicitly mute is calm.
+    # Logs ALWAYS go to stderr so --json keeps stdout as a single clean object.
     logging.basicConfig(
         level=logging.INFO,
         format="%(asctime)s  %(levelname)-7s  %(message)s",
         datefmt="%H:%M:%S",
+        stream=sys.stderr,
     )
     if verbose:
         for name in _OUR_LOGGERS:
             logging.getLogger(name).setLevel(logging.DEBUG)
+
+
+def _emit_json(payload: dict):
+    """Print exactly one JSON object to stdout (the machine-readable contract)."""
+    sys.stdout.write(_json_mod.dumps(payload, ensure_ascii=False))
+    sys.stdout.write("\n")
+    sys.stdout.flush()
+
+
+def _speakers_payload(file_id: int) -> list[dict]:
+    """Structured speaker list for JSON output: label, display_name, first sample."""
+    out = []
+    for sp in db.get_speakers(file_id):
+        sample = None
+        if sp.get("sample_segments_json"):
+            try:
+                segs = _json_mod.loads(sp["sample_segments_json"])
+                if segs:
+                    sample = segs[0]["text"].strip()
+            except Exception:
+                pass
+        out.append({
+            "label":        sp["diarization_label"],
+            "display_name": sp.get("display_name"),
+            "sample":       sample,
+        })
+    return out
 
 
 def _resolve_file(file_arg: str, home_folder: str) -> str | None:
@@ -227,8 +257,11 @@ def run(args) -> int:
         jobs_root = (getattr(args, "jobs_root", None) or getattr(args, "dest", None)
                      or db.get_setting("destination_folder")
                      or db.get_setting("jobs_root_folder") or "")
+        destination_copy = None
         if job_id.strip() and jobs_root.strip():
             ok, msg = route_to_job_folder(txt_path, stem, job_id, jobs_root)
+            if ok:
+                destination_copy = msg
             log.info("[5/5] Destination copy: %s", msg if ok else f"skipped — {msg}")
         else:
             log.info("[5/5] No destination copy (tag='%s', destination set=%s).",
@@ -237,12 +270,30 @@ def run(args) -> int:
         db.update_file(fid, status="done", error_message=None)
         log.info("DONE. Transcript at: %s", txt_path)
 
-        # Print a short preview
-        with open(txt_path, encoding="utf-8") as f:
-            preview = f.read()[:500]
-        print("\n----- transcript preview -----")
-        print(preview)
-        print("------------------------------\n")
+        final = db.get_file(fid)
+        if getattr(args, "json", False):
+            _emit_json({
+                "ok":                   True,
+                "command":              "process",
+                "file_id":              fid,
+                "source_path":          abs_path,
+                "filename":             final.get("filename"),
+                "status":               final.get("status"),
+                "audio_path":           final.get("audio_path"),
+                "transcript_txt_path":  txt_path,
+                "transcript_json_path": final.get("transcript_json_path"),
+                "diarized":             bool(do_diarize),
+                "speakers":             _speakers_payload(fid),
+                "destination_copy":     destination_copy,
+                "error":                None,
+            })
+        else:
+            # Print a short preview
+            with open(txt_path, encoding="utf-8") as f:
+                preview = f.read()[:500]
+            print("\n----- transcript preview -----")
+            print(preview)
+            print("------------------------------\n")
         return 0
 
     except Exception as e:
@@ -252,18 +303,37 @@ def run(args) -> int:
         # traceback.format_exception_only avoids source-line lookups.
         import traceback
         log.error("Pipeline failed: %s", e)
-        for line in traceback.format_exception_only(type(e), e):
-            print(line, end="")
         db.update_file(fid, status="error", error_message=str(e))
+        if getattr(args, "json", False):
+            _emit_json({
+                "ok":                   False,
+                "command":              "process",
+                "file_id":              fid,
+                "source_path":          abs_path,
+                "status":               "error",
+                "audio_path":           None,
+                "transcript_txt_path":  None,
+                "transcript_json_path": None,
+                "diarized":             False,
+                "speakers":             [],
+                "destination_copy":     None,
+                "error":                str(e),
+            })
+        else:
+            for line in traceback.format_exception_only(type(e), e):
+                print(line, end="", file=sys.stderr)
         return 1
 
 
-def _list_speakers(file_id: int):
-    """Print current speakers + a sample excerpt for each."""
+def _list_speakers(file_id: int, quiet: bool = False):
+    """Print current speakers + a sample excerpt for each (unless quiet)."""
     import json
     speakers = db.get_speakers(file_id)
     if not speakers:
-        print("No speakers found — has the file been processed?")
+        if not quiet:
+            print("No speakers found — has the file been processed?", file=sys.stderr)
+        return speakers
+    if quiet:
         return speakers
     print("\nSpeakers in this file:")
     for sp in speakers:
@@ -285,14 +355,20 @@ def _list_speakers(file_id: int):
 
 def run_label(args) -> int:
     """Label speakers for an already-processed file."""
-    from processing.labeler import write_labeled_transcript
-    from processing.job_router import route_to_job_folder
+    from meeting_ninja.processing.labeler import write_labeled_transcript
+    from meeting_ninja.processing.job_router import route_to_job_folder
     init_db()
 
     home_folder = args.home or db.get_setting("home_folder", "")
     abs_path = _resolve_file(args.file, home_folder)
+    _as_json = getattr(args, "json", False)
     if not abs_path:
         log.error("Could not resolve file: %s", args.file)
+        if _as_json:
+            _emit_json({"ok": False, "command": "label", "file_id": None,
+                        "error": f"Could not resolve file: {args.file}",
+                        "speakers": [], "transcript_txt_path": None,
+                        "destination_copy": None})
         return 2
 
     record = next(
@@ -302,11 +378,21 @@ def run_label(args) -> int:
     )
     if not record:
         log.error("No DB record for this file. Process it first.")
+        if _as_json:
+            _emit_json({"ok": False, "command": "label", "file_id": None,
+                        "error": "No DB record for this file. Process it first.",
+                        "speakers": [], "transcript_txt_path": None,
+                        "destination_copy": None})
         return 2
     file_id = record["id"]
 
-    speakers = _list_speakers(file_id)
+    speakers = _list_speakers(file_id, quiet=_as_json)
     if not speakers:
+        if _as_json:
+            _emit_json({"ok": False, "command": "label", "file_id": file_id,
+                        "error": "No speakers found — has the file been processed?",
+                        "speakers": [], "transcript_txt_path": None,
+                        "destination_copy": None})
         return 2
 
     label_to_id = {sp["diarization_label"]: sp["id"] for sp in speakers}
@@ -347,6 +433,11 @@ def run_label(args) -> int:
 
     if not assignments:
         log.info("No names provided. Use --speaker LABEL=Name or --interactive.")
+        if _as_json:
+            _emit_json({"ok": True, "command": "label", "file_id": file_id,
+                        "error": None, "speakers": _speakers_payload(file_id),
+                        "transcript_txt_path": record.get("transcript_txt_path"),
+                        "destination_copy": None})
         return 0
 
     # Apply
@@ -367,11 +458,19 @@ def run_label(args) -> int:
     tag = rec.get("job_id") or ""
     dest = (args.dest or db.get_setting("destination_folder")
             or db.get_setting("jobs_root_folder") or "")
+    destination_copy = None
     if tag.strip() and dest.strip() and txt_path:
         stem = Path(rec["source_path"]).stem
         ok, msg = route_to_job_folder(txt_path, stem, tag, dest)
+        if ok:
+            destination_copy = msg
         log.info("Destination copy: %s", msg if ok else f"skipped — {msg}")
 
+    if _as_json:
+        _emit_json({"ok": True, "command": "label", "file_id": file_id,
+                    "error": None, "speakers": _speakers_payload(file_id),
+                    "transcript_txt_path": txt_path,
+                    "destination_copy": destination_copy})
     return 0
 
 
@@ -394,6 +493,8 @@ def main():
         parser.add_argument("--dest", "--jobs-root", dest="dest", default=None,
                             help="Override destination folder.")
         parser.add_argument("--hf-token", default=None, help="Override HuggingFace token.")
+        parser.add_argument("--json", action="store_true",
+                            help="Emit a single JSON result object to stdout (logs go to stderr).")
         parser.add_argument("-v", "--verbose", action="store_true", help="Debug logging.")
 
     # ── label ──────────────────────────────────────────────────────────────────
@@ -406,6 +507,8 @@ def main():
     pl.add_argument("--list", action="store_true", help="Just list speakers and exit.")
     pl.add_argument("--home", default=None, help="Override home folder.")
     pl.add_argument("--dest", default=None, help="Override destination folder.")
+    pl.add_argument("--json", action="store_true",
+                    help="Emit a single JSON result object to stdout (logs go to stderr).")
     pl.add_argument("-v", "--verbose", action="store_true", help="Debug logging.")
 
     args = p.parse_args()
@@ -414,17 +517,30 @@ def main():
     if args.command == "label":
         if getattr(args, "list", False):
             init_db()
+            _as_json = getattr(args, "json", False)
             home_folder = args.home or db.get_setting("home_folder", "")
             abs_path = _resolve_file(args.file, home_folder)
             if not abs_path:
                 log.error("Could not resolve file: %s", args.file)
+                if _as_json:
+                    _emit_json({"ok": False, "command": "label-list", "file_id": None,
+                                "error": f"Could not resolve file: {args.file}",
+                                "speakers": []})
                 sys.exit(2)
             rec = next((f for f in db.get_all_files()
                         if str(Path(f["source_path"]).resolve()) == abs_path), None)
             if not rec:
                 log.error("No DB record. Process the file first.")
+                if _as_json:
+                    _emit_json({"ok": False, "command": "label-list", "file_id": None,
+                                "error": "No DB record. Process the file first.",
+                                "speakers": []})
                 sys.exit(2)
-            _list_speakers(rec["id"])
+            if _as_json:
+                _emit_json({"ok": True, "command": "label-list", "file_id": rec["id"],
+                            "error": None, "speakers": _speakers_payload(rec["id"])})
+            else:
+                _list_speakers(rec["id"])
             sys.exit(0)
         sys.exit(run_label(args))
 

@@ -2,7 +2,7 @@
 Does NOT touch your actual recordings or transcript files on disk.
 Run:  python cleanup.py
 """
-from db.client import get_conn
+from meeting_ninja.db.client import get_conn
 
 conn = get_conn()
 conn.execute("DELETE FROM segments")

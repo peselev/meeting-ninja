@@ -3,10 +3,10 @@ import sys
 import subprocess
 import streamlit as st
 from pathlib import Path
-from db import client as db
-from utils.media_info import check_ffmpeg
-from processing.transcribe import WHISPER_MODELS
-from processing.diarize import is_pyannote_available
+from meeting_ninja.db import client as db
+from meeting_ninja.utils.media_info import check_ffmpeg
+from meeting_ninja.processing.transcribe import WHISPER_MODELS
+from meeting_ninja.processing.diarize import is_pyannote_available
 
 
 def _pick_folder(current: str) -> str:

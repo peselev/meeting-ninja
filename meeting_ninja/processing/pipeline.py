@@ -8,15 +8,15 @@ import queue
 import traceback
 from pathlib import Path
 
-from db import client as db
-from processing.extract_audio import extract_audio
-from processing.transcribe import transcribe, load_segments_from_json
-from processing.diarize import (
+from meeting_ninja.db import client as db
+from meeting_ninja.processing.extract_audio import extract_audio
+from meeting_ninja.processing.transcribe import transcribe, load_segments_from_json
+from meeting_ninja.processing.diarize import (
     is_pyannote_available, diarize,
     merge_diarization_with_segments, collect_speaker_samples,
 )
-from processing.job_router import route_to_job_folder
-from utils.media_info import get_source_type, SOUNDFILE_NATIVE
+from meeting_ninja.processing.job_router import route_to_job_folder
+from meeting_ninja.utils.media_info import get_source_type, SOUNDFILE_NATIVE
 
 
 # Each message: {"file_id": int, "stage": str, "done": bool, "error": str|None}

@@ -3,10 +3,10 @@ import json
 import streamlit as st
 from pathlib import Path
 
-from db import client as db
-from processing.job_router import route_to_job_folder
-from processing.labeler import write_labeled_transcript
-from utils.media_info import format_duration
+from meeting_ninja.db import client as db
+from meeting_ninja.processing.job_router import route_to_job_folder
+from meeting_ninja.processing.labeler import write_labeled_transcript
+from meeting_ninja.utils.media_info import format_duration
 
 VIDEO_EXTS = {".mov", ".mp4", ".mkv", ".avi", ".webm", ".m4v"}
 

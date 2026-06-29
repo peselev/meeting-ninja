@@ -1,8 +1,8 @@
 from __future__ import annotations
-import utils.quiet  # noqa: F401  — MUST be imported before torch/pyannote/whisper
+import meeting_ninja.utils.quiet  # noqa: F401  — MUST be imported before torch/pyannote/whisper
 import streamlit as st
-from db.client import init_db
-from utils.media_info import check_ffmpeg
+from meeting_ninja.db.client import init_db
+from meeting_ninja.utils.media_info import check_ffmpeg
 
 # ── Page config ───────────────────────────────────────────────────────────────
 st.set_page_config(
