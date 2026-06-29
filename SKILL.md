@@ -57,8 +57,7 @@ Options:
 
 | Flag | Meaning |
 |---|---|
-| `--description "<text>"` | Renames the original file (and its outputs) to this text. See "Renaming" below. |
-| `--no-rename` | Process with a description but leave the original filename untouched. |
+| `--description "<text>"` | Names the derived files (audio/, transcripts/) after this text. The source file is never renamed. See "Naming outputs" below. |
 | `--offset <seconds>` | Skip dead air at the start (e.g. `--offset 30`). |
 | `--model <name>` | `tiny`, `base`, `small`, `medium`, `large-v2`, `large-v3`. Larger is more accurate and slower. Default `base`. |
 | `--language <code>` | ISO code like `en`, `ru`, `he`, or `auto` to detect. Default `en`. |
@@ -73,9 +72,8 @@ Success output:
   "ok": true,
   "command": "process",
   "file_id": 12,
-  "source_path": "/abs/path/Weekly sync.mov",
-  "filename": "Weekly sync.mov",
-  "renamed_from": "/abs/path/raw clip 2026.mov",
+  "source_path": "/abs/path/raw recording.mov",
+  "filename": "raw recording.mov",
   "status": "done",
   "audio_path": "/abs/path/audio/Weekly sync.wav",
   "transcript_txt_path": "/abs/path/transcripts/Weekly sync.txt",
@@ -93,8 +91,8 @@ Field notes:
 
 - `transcript_txt_path` is the labeled plain-text transcript. Read this for the
   result. It contains `[HH:MM:SS] Speaker: text` lines.
-- `renamed_from` is the old path when `--description` triggered a rename, else
-  `null`.
+- `source_path` and `filename` are always the original recording. It is never
+  renamed; only the derived files take the description name.
 - `speakers` lists each detected speaker with a sample excerpt. `display_name`
   is `null` until labeled.
 - `diarized` is `false` when diarization was skipped or unavailable.
@@ -142,19 +140,23 @@ destination copy.
   "destination_copy": null }
 ```
 
-## Renaming with `--description`
+## Naming outputs with `--description`
 
-When `--description` is set, the original recording is renamed in place to the
-description text, keeping case and spaces and stripping only path-breaking
-characters. The `audio/` and `transcripts/` outputs follow the new name. A name
-clash gets a Finder-style ` (2)`, ` (3)` suffix and never overwrites. Pass
-`--no-rename` to keep the original filename.
+When `--description` is set, the derived files are named after the description
+text instead of the source filename: `audio/<description>.wav`,
+`transcripts/<description>.txt` / `.json`. Case and spaces are kept; only
+path-breaking characters are stripped. The source recording itself is never
+renamed or moved.
 
-Use this to give a messy recording a clean, meaningful name in one step:
+Naming is unique per file. If a different recording already produced outputs
+under the same description, the next one gets a Finder-style ` (2)`, ` (3)`
+suffix so nothing is overwritten. Reprocessing the same file reuses its own
+name. Without a description, outputs fall back to the source filename's stem.
 
 ```bash
 meeting-ninja --file "/recordings/2026-06-05 11-58-45.mov" \
   --description "Intro call with Nav" --json
+# → transcripts/Intro call with Nav.txt
 ```
 
 ## Formats

@@ -1,58 +1,58 @@
 """
-file_naming.py — rename a source recording to match its description.
+file_naming.py — derive output filenames from a file's description.
 
-When a file is processed with a description, the original is renamed in place to
-the (filesystem-safe) description text, keeping its extension. Outputs derive
-their names from the source stem, so they follow automatically.
+The source recording is never renamed. When a file has a description, its
+derived files (audio/, transcripts/) are named after the sanitized description
+instead of the source filename. Naming is unique per file: a *different* file
+that happens to share a description gets a Finder-style ` (N)` suffix so nothing
+is overwritten, while reprocessing the *same* file reuses its own stem.
 """
 from __future__ import annotations
 import re
 from pathlib import Path
 
-# Characters that break paths on macOS / Unix: path separators, colon
-# (the classic HFS separator, which Finder also rejects), and control chars.
+# Characters that break paths on macOS / Unix: path separators, colon (the
+# classic HFS separator, which Finder also rejects), and control chars.
 _ILLEGAL = re.compile(r"[/\\:\x00-\x1f]")
 
 
-def slug_from_description(description: str, ext: str) -> str | None:
-    """Turn free-text into a filesystem-safe filename.
+def sanitize_stem(description: str) -> str | None:
+    """Turn free-text into a filesystem-safe filename stem (no extension).
 
-    Keeps the original case and spaces; only strips characters that would break
+    Keeps the original case and spaces; strips only characters that would break
     a path. Returns None if nothing usable remains.
     """
     base = _ILLEGAL.sub(" ", description)
     base = re.sub(r"\s+", " ", base).strip().strip(".")
+    return base or None
+
+
+def derive_output_stem(description: str, file_id: int, all_files: list[dict]) -> str | None:
+    """Pick the output stem for this file from its description.
+
+    Unique across *other* files' outputs (so two recordings sharing a
+    description don't overwrite each other), but stable when reprocessing the
+    same file (its own outputs are excluded from the collision check). Returns
+    None when the description sanitizes to nothing, signalling the caller to
+    fall back to the source filename.
+    """
+    base = sanitize_stem(description)
     if not base:
         return None
-    return f"{base}{ext}"
 
+    # Stems already claimed by OTHER files' derived outputs.
+    claimed: set[str] = set()
+    for f in all_files:
+        if f.get("id") == file_id:
+            continue
+        for key in ("transcript_txt_path", "transcript_json_path", "audio_path"):
+            path = f.get(key)
+            if path:
+                claimed.add(Path(path).stem)
 
-def unique_path(directory: Path, filename: str) -> Path:
-    """Finder-style collision handling: name.ext, name (2).ext, name (3).ext …"""
-    candidate = directory / filename
-    if not candidate.exists():
-        return candidate
-    stem = Path(filename).stem
-    ext = Path(filename).suffix
+    candidate = base
     n = 2
-    while True:
-        candidate = directory / f"{stem} ({n}){ext}"
-        if not candidate.exists():
-            return candidate
+    while candidate in claimed:
+        candidate = f"{base} ({n})"
         n += 1
-
-
-def rename_source_with_description(source_path: str, description: str) -> str:
-    """Rename the original recording in place to match its description.
-
-    Returns the new absolute path, or the original path unchanged when the
-    description is empty after sanitizing or the file is already named correctly.
-    Never overwrites an existing file; collisions get a ` (N)` suffix.
-    """
-    src = Path(source_path)
-    target_name = slug_from_description(description, src.suffix)
-    if not target_name or target_name == src.name:
-        return str(src.resolve())
-    dest = unique_path(src.parent, target_name)
-    src.rename(dest)
-    return str(dest.resolve())
+    return candidate

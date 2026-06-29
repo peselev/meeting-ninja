@@ -6,10 +6,11 @@ WHISPER_MODELS = ["tiny", "base", "small", "medium", "large-v2", "large-v3"]
 
 
 def transcribe(audio_path: str, home_folder: str, model_name: str = "base",
-               language: str | None = None) -> tuple[str, str]:
+               language: str | None = None, out_stem: str | None = None) -> tuple[str, str]:
     """
     Transcribe audio using Whisper.
     language: ISO code like 'en' to force, or None to auto-detect.
+    out_stem: name the .txt/.json after this stem instead of the audio filename.
     Returns (txt_path, json_path).
     Saves both to {home_folder}/transcripts/.
     """
@@ -18,7 +19,7 @@ def transcribe(audio_path: str, home_folder: str, model_name: str = "base",
     transcript_dir = Path(home_folder) / "transcripts"
     transcript_dir.mkdir(parents=True, exist_ok=True)
 
-    stem = Path(audio_path).stem
+    stem = out_stem or Path(audio_path).stem
     txt_path = transcript_dir / f"{stem}.txt"
     json_path = transcript_dir / f"{stem}.json"
 

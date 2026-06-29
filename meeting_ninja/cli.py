@@ -36,7 +36,7 @@ from meeting_ninja.processing.diarize import (
     merge_diarization_with_segments, collect_speaker_samples,
 )
 from meeting_ninja.processing.job_router import route_to_job_folder
-from meeting_ninja.processing.file_naming import rename_source_with_description
+from meeting_ninja.processing.file_naming import derive_output_stem
 
 
 log = logging.getLogger("cli")
@@ -179,16 +179,6 @@ def run(args) -> int:
         return 2
     log.info("Resolved file: %s", abs_path)
 
-    # Rename the original to match its description (unless --no-rename). Outputs
-    # derive from the source stem, so they follow the new name automatically.
-    renamed_from = None
-    if args.description and not getattr(args, "no_rename", False):
-        new_path = rename_source_with_description(abs_path, args.description)
-        if new_path != abs_path:
-            log.info("Renamed source → %s", new_path)
-            renamed_from = abs_path
-            abs_path = new_path
-
     # Output root: an explicit --home wins; otherwise outputs (audio/,
     # transcripts/) land next to the source recording.
     home_folder = args.home or str(Path(abs_path).parent)
@@ -199,7 +189,16 @@ def run(args) -> int:
              offset_sec, args.model, args.language, not args.no_diarize)
 
     fid = _find_or_create_file_record(abs_path, offset_sec, args.description, args.job_id)
-    stem = Path(abs_path).stem
+
+    # When a description is set, name the derived files (audio/, transcripts/)
+    # after it instead of the source filename. The source itself is never
+    # renamed. derive_output_stem keeps the name unique across other files'
+    # outputs while staying stable when reprocessing this same file.
+    out_stem = (derive_output_stem(args.description, fid, db.get_all_files())
+                if args.description else None)
+    stem = out_stem or Path(abs_path).stem
+    if out_stem:
+        log.info("Naming outputs after description: %s", out_stem)
 
     try:
         # ── Step 1: Audio extraction ──────────────────────────────────────────
@@ -217,7 +216,7 @@ def run(args) -> int:
         if needs_extract:
             log.info("[1/5] Extracting audio (offset=%.1fs)…", offset_sec)
             db.update_file(fid, status="extracting")
-            audio_path = extract_audio(abs_path, home_folder, offset_sec)
+            audio_path = extract_audio(abs_path, home_folder, offset_sec, out_stem=out_stem)
             db.update_file(fid, audio_path=audio_path)
             log.info("      → %s", audio_path)
         else:
@@ -228,7 +227,7 @@ def run(args) -> int:
         log.info("[2/5] Transcribing with Whisper '%s'…", args.model)
         db.update_file(fid, status="transcribing")
         lang = None if args.language == "auto" else args.language
-        txt_path, json_path = transcribe(audio_path, home_folder, args.model, lang)
+        txt_path, json_path = transcribe(audio_path, home_folder, args.model, lang, out_stem=out_stem)
         db.update_file(fid, transcript_txt_path=txt_path,
                        transcript_json_path=json_path, status="transcribed")
         log.info("      → %s", txt_path)
@@ -312,7 +311,6 @@ def run(args) -> int:
                 "file_id":              fid,
                 "source_path":          abs_path,
                 "filename":             Path(abs_path).name,
-                "renamed_from":         renamed_from,
                 "status":               final.get("status"),
                 "audio_path":           final.get("audio_path"),
                 "transcript_txt_path":  txt_path,
@@ -520,9 +518,7 @@ def main():
         parser.add_argument("--offset", type=float, default=0, help="Seconds to skip at start.")
         parser.add_argument("--model", default="base", choices=WHISPER_MODELS, help="Whisper model.")
         parser.add_argument("--language", default="en", help="ISO code (en, ru, he…) or 'auto'.")
-        parser.add_argument("--description", default=None, help="Free-text description.")
-        parser.add_argument("--no-rename", action="store_true",
-                            help="Don't rename the source file even when --description is set.")
+        parser.add_argument("--description", default=None, help="Free-text description. Names the derived audio/transcript files.")
         parser.add_argument("--tag", "--job-id", dest="job_id", default=None,
                             help="Tag/ID for transcript routing to destination folder.")
         parser.add_argument("--no-diarize", action="store_true", help="Skip speaker diarization.")
