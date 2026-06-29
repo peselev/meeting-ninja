@@ -34,7 +34,40 @@ def get_source_type(path: str) -> str:
         return "video"
     if ext in AUDIO_EXTENSIONS:
         return "audio"
-    raise ValueError(f"Unsupported extension: {ext}")
+    # Unknown extension: ask ffprobe what's actually inside, so formats like
+    # .opus, .wma, .m4b, .3gp, etc. work without being hardcoded. Anything with
+    # a decodable audio track is accepted; the pipeline transcodes it to WAV.
+    has_video, has_audio = probe_av_streams(path)
+    if has_video:
+        return "video"
+    if has_audio:
+        return "audio"
+    raise ValueError(f"Unsupported or undecodable file: {path}")
+
+
+def probe_av_streams(path: str) -> tuple[bool, bool]:
+    """Return (has_real_video, has_audio) via ffprobe.
+
+    Embedded cover art (album/poster images) shows up as a video stream tagged
+    `attached_pic`; it's ignored here so an audio file with artwork is still
+    classified as audio. Returns (False, False) if the file can't be read.
+    """
+    try:
+        result = subprocess.run(
+            ["ffprobe", "-v", "quiet", "-print_format", "json",
+             "-show_streams", path],
+            capture_output=True, text=True, check=True,
+        )
+        streams = json.loads(result.stdout).get("streams", [])
+    except Exception:
+        return (False, False)
+    has_video = any(
+        s.get("codec_type") == "video"
+        and not s.get("disposition", {}).get("attached_pic")
+        for s in streams
+    )
+    has_audio = any(s.get("codec_type") == "audio" for s in streams)
+    return (has_video, has_audio)
 
 
 def get_media_info(path: str) -> dict:

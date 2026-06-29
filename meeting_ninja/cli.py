@@ -28,7 +28,7 @@ from pathlib import Path
 
 from meeting_ninja.db import client as db
 from meeting_ninja.db.client import init_db
-from meeting_ninja.utils.media_info import get_source_type, get_media_info, check_ffmpeg
+from meeting_ninja.utils.media_info import get_source_type, get_media_info, check_ffmpeg, SOUNDFILE_NATIVE
 from meeting_ninja.processing.extract_audio import extract_audio
 from meeting_ninja.processing.transcribe import transcribe, load_segments_from_json, WHISPER_MODELS
 from meeting_ninja.processing.diarize import (
@@ -36,6 +36,7 @@ from meeting_ninja.processing.diarize import (
     merge_diarization_with_segments, collect_speaker_samples,
 )
 from meeting_ninja.processing.job_router import route_to_job_folder
+from meeting_ninja.processing.file_naming import rename_source_with_description
 
 
 log = logging.getLogger("cli")
@@ -178,6 +179,16 @@ def run(args) -> int:
         return 2
     log.info("Resolved file: %s", abs_path)
 
+    # Rename the original to match its description (unless --no-rename). Outputs
+    # derive from the source stem, so they follow the new name automatically.
+    renamed_from = None
+    if args.description and not getattr(args, "no_rename", False):
+        new_path = rename_source_with_description(abs_path, args.description)
+        if new_path != abs_path:
+            log.info("Renamed source → %s", new_path)
+            renamed_from = abs_path
+            abs_path = new_path
+
     # Output root: an explicit --home wins; otherwise outputs (audio/,
     # transcripts/) land next to the source recording.
     home_folder = args.home or str(Path(abs_path).parent)
@@ -192,8 +203,18 @@ def run(args) -> int:
 
     try:
         # ── Step 1: Audio extraction ──────────────────────────────────────────
+        # Transcode to 16kHz mono WAV for video, for an offset trim, OR when the
+        # source isn't directly readable by soundfile (diarization's loader).
+        # That last case covers .opus/.m4a/.mp3/.aac: Whisper can decode them via
+        # ffmpeg, but pyannote's soundfile path can't, so they need a WAV first.
         source_type = get_source_type(abs_path)
-        if source_type == "video" or offset_sec > 0:
+        suffix = Path(abs_path).suffix.lower()
+        needs_extract = (
+            source_type == "video"
+            or offset_sec > 0
+            or suffix not in SOUNDFILE_NATIVE
+        )
+        if needs_extract:
             log.info("[1/5] Extracting audio (offset=%.1fs)…", offset_sec)
             db.update_file(fid, status="extracting")
             audio_path = extract_audio(abs_path, home_folder, offset_sec)
@@ -201,7 +222,7 @@ def run(args) -> int:
             log.info("      → %s", audio_path)
         else:
             audio_path = abs_path
-            log.info("[1/5] Audio source, no offset — using original file.")
+            log.info("[1/5] Soundfile-native source, no offset — using original file.")
 
         # ── Step 2: Transcription ─────────────────────────────────────────────
         log.info("[2/5] Transcribing with Whisper '%s'…", args.model)
@@ -290,7 +311,8 @@ def run(args) -> int:
                 "command":              "process",
                 "file_id":              fid,
                 "source_path":          abs_path,
-                "filename":             final.get("filename"),
+                "filename":             Path(abs_path).name,
+                "renamed_from":         renamed_from,
                 "status":               final.get("status"),
                 "audio_path":           final.get("audio_path"),
                 "transcript_txt_path":  txt_path,
@@ -499,6 +521,8 @@ def main():
         parser.add_argument("--model", default="base", choices=WHISPER_MODELS, help="Whisper model.")
         parser.add_argument("--language", default="en", help="ISO code (en, ru, he…) or 'auto'.")
         parser.add_argument("--description", default=None, help="Free-text description.")
+        parser.add_argument("--no-rename", action="store_true",
+                            help="Don't rename the source file even when --description is set.")
         parser.add_argument("--tag", "--job-id", dest="job_id", default=None,
                             help="Tag/ID for transcript routing to destination folder.")
         parser.add_argument("--no-diarize", action="store_true", help="Skip speaker diarization.")
