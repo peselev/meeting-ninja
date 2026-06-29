@@ -85,20 +85,24 @@ def _speakers_payload(file_id: int) -> list[dict]:
     return out
 
 
-def _resolve_file(file_arg: str, home_folder: str) -> str | None:
-    """Resolve --file into an absolute path."""
+def _resolve_file(file_arg: str, search_root: str) -> str | None:
+    """Resolve --file into an absolute path.
+
+    `search_root` is only used to locate the file when `file_arg` is relative
+    or a bare filename. It does not determine where outputs are written.
+    """
     p = Path(file_arg)
     if p.is_absolute() and p.exists():
         return str(p.resolve())
 
-    home = Path(home_folder)
-    # relative to home
-    candidate = home / file_arg
+    root = Path(search_root) if search_root else Path.cwd()
+    # relative to the search root
+    candidate = root / file_arg
     if candidate.exists():
         return str(candidate.resolve())
 
     # search recursively by filename
-    matches = list(home.rglob(p.name))
+    matches = list(root.rglob(p.name)) if root.exists() else []
     matches = [m for m in matches if m.is_file()]
     if len(matches) == 1:
         return str(matches[0].resolve())
@@ -158,17 +162,26 @@ def run(args) -> int:
         log.error("ffmpeg/ffprobe not found on PATH. Install with `brew install ffmpeg`.")
         return 2
 
-    home_folder = args.home or db.get_setting("home_folder", "")
-    if not home_folder:
-        log.error("No home folder set. Pass --home or configure it in the app Settings.")
-        return 2
-    log.info("Home folder: %s", home_folder)
-
-    abs_path = _resolve_file(args.file, home_folder)
+    # Find the file first. The search root only helps locate a relative/bare
+    # filename; it does not decide where outputs go.
+    search_root = args.home or db.get_setting("home_folder", "") or str(Path.cwd())
+    abs_path = _resolve_file(args.file, search_root)
     if not abs_path:
         log.error("Could not resolve file: %s", args.file)
+        if getattr(args, "json", False):
+            _emit_json({"ok": False, "command": "process", "file_id": None,
+                        "source_path": args.file, "status": "error",
+                        "audio_path": None, "transcript_txt_path": None,
+                        "transcript_json_path": None, "diarized": False,
+                        "speakers": [], "destination_copy": None,
+                        "error": f"Could not resolve file: {args.file}"})
         return 2
     log.info("Resolved file: %s", abs_path)
+
+    # Output root: an explicit --home wins; otherwise outputs (audio/,
+    # transcripts/) land next to the source recording.
+    home_folder = args.home or str(Path(abs_path).parent)
+    log.info("Output root: %s", home_folder)
 
     offset_sec = float(args.offset)
     log.info("Offset: %.1f s   Model: %s   Language: %s   Diarize: %s",
@@ -359,8 +372,8 @@ def run_label(args) -> int:
     from meeting_ninja.processing.job_router import route_to_job_folder
     init_db()
 
-    home_folder = args.home or db.get_setting("home_folder", "")
-    abs_path = _resolve_file(args.file, home_folder)
+    search_root = args.home or db.get_setting("home_folder", "") or str(Path.cwd())
+    abs_path = _resolve_file(args.file, search_root)
     _as_json = getattr(args, "json", False)
     if not abs_path:
         log.error("Could not resolve file: %s", args.file)
@@ -489,7 +502,9 @@ def main():
         parser.add_argument("--tag", "--job-id", dest="job_id", default=None,
                             help="Tag/ID for transcript routing to destination folder.")
         parser.add_argument("--no-diarize", action="store_true", help="Skip speaker diarization.")
-        parser.add_argument("--home", default=None, help="Override home folder.")
+        parser.add_argument("--home", default=None,
+                            help="Optional. Output root for audio/ and transcripts/. "
+                                 "Defaults to the source file's folder.")
         parser.add_argument("--dest", "--jobs-root", dest="dest", default=None,
                             help="Override destination folder.")
         parser.add_argument("--hf-token", default=None, help="Override HuggingFace token.")
@@ -505,7 +520,8 @@ def main():
     pl.add_argument("--interactive", action="store_true",
                     help="Prompt for each unnamed speaker, showing excerpts.")
     pl.add_argument("--list", action="store_true", help="Just list speakers and exit.")
-    pl.add_argument("--home", default=None, help="Override home folder.")
+    pl.add_argument("--home", default=None,
+                    help="Optional. Folder to search when --file is a bare name.")
     pl.add_argument("--dest", default=None, help="Override destination folder.")
     pl.add_argument("--json", action="store_true",
                     help="Emit a single JSON result object to stdout (logs go to stderr).")
@@ -518,8 +534,8 @@ def main():
         if getattr(args, "list", False):
             init_db()
             _as_json = getattr(args, "json", False)
-            home_folder = args.home or db.get_setting("home_folder", "")
-            abs_path = _resolve_file(args.file, home_folder)
+            search_root = args.home or db.get_setting("home_folder", "") or str(Path.cwd())
+            abs_path = _resolve_file(args.file, search_root)
             if not abs_path:
                 log.error("Could not resolve file: %s", args.file)
                 if _as_json:
