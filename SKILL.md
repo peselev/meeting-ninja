@@ -79,6 +79,7 @@ Success output:
   "transcript_txt_path": "/abs/path/transcripts/Weekly sync.txt",
   "transcript_json_path": "/abs/path/transcripts/Weekly sync.json",
   "diarized": true,
+  "diarization_skipped_reason": null,
   "speakers": [
     { "label": "SPEAKER_00", "display_name": null, "sample": "first words of a sample segment" }
   ],
@@ -90,12 +91,16 @@ Success output:
 Field notes:
 
 - `transcript_txt_path` is the labeled plain-text transcript. Read this for the
-  result. It contains `[HH:MM:SS] Speaker: text` lines.
+  result. It contains `[HH:MM:SS] Speaker: text` lines. After `process` the
+  speaker column holds diarization labels (`SPEAKER_00`, `SPEAKER_01`); run
+  `label` to swap in real names.
+- `diarized` is `false` when diarization was skipped or unavailable.
+  `diarization_skipped_reason` then explains why (no token, `--no-diarize`,
+  pyannote missing); it is `null` when diarization ran.
 - `source_path` and `filename` are always the original recording. It is never
   renamed; only the derived files take the description name.
 - `speakers` lists each detected speaker with a sample excerpt. `display_name`
   is `null` until labeled.
-- `diarized` is `false` when diarization was skipped or unavailable.
 
 Failure output has `"ok": false`, populated `"error"`, and a non-zero exit code:
 

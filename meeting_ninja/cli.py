@@ -22,6 +22,7 @@ import meeting_ninja.utils.quiet  # noqa: F401  — MUST be imported before torc
 import argparse
 import json as _json_mod
 import logging
+import os
 import sys
 from datetime import datetime
 from pathlib import Path
@@ -57,6 +58,27 @@ def _setup_logging(verbose: bool):
     if verbose:
         for name in _OUR_LOGGERS:
             logging.getLogger(name).setLevel(logging.DEBUG)
+
+
+def _resolve_hf_token(explicit: str | None) -> str | None:
+    """Find a HuggingFace token from, in priority order: the --hf-token flag, the
+    app setting, the HF_TOKEN/HUGGINGFACE_TOKEN env vars, then the standard
+    huggingface cache (~/.cache/huggingface/token). The cache fallback means a
+    normal `huggingface-cli login` is enough; the token need not be re-entered
+    into the app."""
+    if explicit:
+        return explicit
+    tok = db.get_setting("hf_token")
+    if tok:
+        return tok
+    tok = os.environ.get("HF_TOKEN") or os.environ.get("HUGGINGFACE_TOKEN")
+    if tok:
+        return tok
+    try:
+        from huggingface_hub import get_token
+        return get_token()
+    except Exception:
+        return None
 
 
 def _emit_json(payload: dict):
@@ -241,8 +263,9 @@ def run(args) -> int:
                 seg["end_sec"]   += offset_sec
 
         # ── Step 3+4: Diarization + merge ─────────────────────────────────────
-        hf_token = args.hf_token or db.get_setting("hf_token") or None
+        hf_token = _resolve_hf_token(args.hf_token)
         do_diarize = (not args.no_diarize) and hf_token and is_pyannote_available()
+        diar_reason = None
 
         if do_diarize:
             log.info("[3/5] Diarizing with pyannote…")
@@ -257,10 +280,19 @@ def run(args) -> int:
             merged = merge_diarization_with_segments(whisper_segments, turns)
             log.info("[4/5] Merged diarization with transcript.")
         else:
-            reason = ("--no-diarize" if args.no_diarize else
-                      "no HF token" if not hf_token else
-                      "pyannote not installed")
-            log.info("[3/5] Skipping diarization (%s). Single speaker.", reason)
+            if args.no_diarize:
+                diar_reason = "--no-diarize was passed"
+                log.info("[3/5] Skipping diarization (%s). Single speaker.", diar_reason)
+            elif not hf_token:
+                diar_reason = ("no HuggingFace token found (checked --hf-token, app "
+                               "settings, HF_TOKEN env, and the huggingface cache)")
+                log.warning("[3/5] Diarization requested but skipped: %s. Speakers will "
+                            "NOT be separated. Run `huggingface-cli login` or set HF_TOKEN, "
+                            "and accept the pyannote model license.", diar_reason)
+            else:
+                diar_reason = "pyannote is not installed"
+                log.warning("[3/5] Diarization requested but skipped: %s. Reinstall with "
+                            "`pipx install '.[diarization]'`.", diar_reason)
             merged = [{**seg, "speaker_label": "SPEAKER_00"} for seg in whisper_segments]
 
         # Persist speakers + segments
@@ -283,6 +315,17 @@ def run(args) -> int:
         ])
         db.update_file(fid, status="labeled")
         log.info("      Speakers: %s", ", ".join(speaker_id_map.keys()))
+
+        # Render the speaker-attributed transcript NOW, overwriting the raw
+        # single-block Whisper text written in step 2. Without this, a finished
+        # `process` leaves the .txt unattributed and only the separate `label`
+        # step produces speaker turns. Lines come out as "[mm:ss] SPEAKER_00: …",
+        # ready for `label` to swap in real names.
+        from meeting_ninja.processing.labeler import write_labeled_transcript
+        labeled = write_labeled_transcript(fid)
+        if labeled:
+            txt_path = labeled
+            log.info("      Wrote speaker-attributed transcript: %s", txt_path)
 
         # ── Step 5: Destination folder routing ────────────────────────────────
         rec = db.get_file(fid)
@@ -316,6 +359,7 @@ def run(args) -> int:
                 "transcript_txt_path":  txt_path,
                 "transcript_json_path": final.get("transcript_json_path"),
                 "diarized":             bool(do_diarize),
+                "diarization_skipped_reason": diar_reason,
                 "speakers":             _speakers_payload(fid),
                 "destination_copy":     destination_copy,
                 "error":                None,
