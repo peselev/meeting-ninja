@@ -116,12 +116,21 @@ def diarize(audio_path: str, hf_token: str) -> list[dict]:
     except Exception:
         _hook_cls = None
 
+    # Use pipeline.apply() as the entry point, NOT pipeline(...). In pyannote
+    # 4.x builds, Pipeline.__call__ is a generator function that returns an
+    # empty generator here (yields nothing), while .apply() returns the real
+    # DiarizeOutput. .apply() also exists in 3.x, so it's safe across versions.
+    # apply() also requires the input mapping to carry a "uri" key — passing a
+    # bare path string crashes inside apply() at `file["uri"]`.
+    _runner = getattr(pipeline, "apply", None) or pipeline
+
     def _run(input_arg):
         if _hook_cls is not None:
             with _hook_cls() as hook:
-                return pipeline(input_arg, hook=hook)
-        return pipeline(input_arg)
+                return _runner(input_arg, hook=hook)
+        return _runner(input_arg)
 
+    uri = Path(audio_path).stem
     try:
         import soundfile as sf
         import torch
@@ -131,29 +140,27 @@ def diarize(audio_path: str, hf_token: str) -> list[dict]:
         log.debug("Loaded audio via soundfile: %s frames @ %d Hz",
                   waveform.shape[-1], sample_rate)
         log.info("      Running diarization (this can take a few minutes)…")
-        diarization = _run({"waveform": waveform, "sample_rate": sample_rate})
+        diarization = _run({"waveform": waveform, "sample_rate": sample_rate, "uri": uri})
     except Exception as e:
         log.debug("soundfile path failed (%s); falling back to file path.", e)
-        diarization = _run(audio_path)
+        diarization = _run({"audio": audio_path, "uri": uri})
 
-    # Extract speaker turns, supporting both APIs:
-    #  - pyannote 4.x: result has .speaker_diarization, iterated as (turn, speaker)
-    #  - pyannote 3.x: result is an Annotation, use .itertracks(yield_label=True)
+    # Normalize to a pyannote Annotation. pyannote 4.x .apply() returns a
+    # DiarizeOutput whose .speaker_diarization is the Annotation; 3.x returns
+    # the Annotation directly.
+    annotation = getattr(diarization, "speaker_diarization", diarization)
+
+    # itertracks(yield_label=True) yields (segment, track, label) and is the
+    # stable extraction API across pyannote versions. Prefer it over iterating
+    # the Annotation directly, which yields bare Segments in some builds (and
+    # would silently unpack start/end into the wrong fields).
     turns = []
-    annotation = getattr(diarization, "speaker_diarization", None)
-    if annotation is not None:
-        # 4.x: iterate (turn, speaker); also supports itertracks for safety
-        try:
-            for turn, speaker in annotation:
-                turns.append({"start_sec": turn.start, "end_sec": turn.end,
-                              "label": str(speaker)})
-        except (TypeError, ValueError):
-            for turn, _, speaker in annotation.itertracks(yield_label=True):
-                turns.append({"start_sec": turn.start, "end_sec": turn.end,
-                              "label": str(speaker)})
+    if hasattr(annotation, "itertracks"):
+        for segment, _, speaker in annotation.itertracks(yield_label=True):
+            turns.append({"start_sec": segment.start, "end_sec": segment.end,
+                          "label": str(speaker)})
     else:
-        # 3.x: the result itself is the Annotation
-        for turn, _, speaker in diarization.itertracks(yield_label=True):
+        for turn, speaker in annotation:
             turns.append({"start_sec": turn.start, "end_sec": turn.end,
                           "label": str(speaker)})
 
