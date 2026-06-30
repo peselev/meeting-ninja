@@ -551,6 +551,209 @@ def run_label(args) -> int:
     return 0
 
 
+def _resolve_and_record(args):
+    """Resolve --file to an absolute path and find its DB record (or None)."""
+    search_root = args.home or db.get_setting("home_folder", "") or str(Path.cwd())
+    abs_path = _resolve_file(args.file, search_root)
+    if not abs_path:
+        return None, None
+    rec = next((f for f in db.get_all_files()
+                if str(Path(f["source_path"]).resolve()) == abs_path), None)
+    return abs_path, rec
+
+
+def run_list(args) -> int:
+    """List recordings under the home folder with their processing status."""
+    init_db()
+    from meeting_ninja.utils.media_info import ALL_EXTENSIONS
+    # Broader than the strict process-gate list, so phone formats (.opus, .m4a,
+    # .aac …) still show up here. A file also appears if it's already tracked,
+    # whatever its extension.
+    media_ext = ALL_EXTENSIONS | {
+        ".opus", ".wma", ".m4a", ".m4b", ".aac", ".ogg", ".oga", ".flac",
+        ".aiff", ".aif", ".amr", ".3gp", ".3g2", ".webm", ".flv", ".wmv",
+        ".mpg", ".mpeg", ".mkv", ".m4v",
+    }
+    _as_json = getattr(args, "json", False)
+    home = args.home or db.get_setting("home_folder", "") or str(Path.cwd())
+    home_path = Path(home)
+    tracked = {str(Path(f["source_path"]).resolve()): f for f in db.get_all_files()}
+    excluded = {"audio", "transcripts", "incoming"}
+    rows = []
+    if home_path.exists():
+        for pth in sorted(home_path.rglob("*")):
+            if not pth.is_file() or pth.name.startswith("."):
+                continue
+            if any(part in excluded for part in pth.relative_to(home_path).parts[:-1]):
+                continue
+            resolved = str(pth.resolve())
+            if pth.suffix.lower() not in media_ext and resolved not in tracked:
+                continue
+            rec = tracked.get(resolved)
+            rows.append({
+                "filename":            pth.name,
+                "source_path":         resolved,
+                "file_id":             (rec or {}).get("id"),
+                "status":              rec["status"] if rec else "unprocessed",
+                "transcript_txt_path": (rec or {}).get("transcript_txt_path"),
+            })
+    if _as_json:
+        _emit_json({"ok": True, "command": "list", "home": str(home_path), "files": rows})
+    else:
+        if not rows:
+            print(f"No recordings found under {home_path}", file=sys.stderr)
+        for r in rows:
+            print(f"  [{r['status']:<11}] {r['filename']}")
+    return 0
+
+
+def run_show(args) -> int:
+    """Print the transcript for a processed file."""
+    init_db()
+    _as_json = getattr(args, "json", False)
+    abs_path, rec = _resolve_and_record(args)
+    if not abs_path:
+        if _as_json:
+            _emit_json({"ok": False, "command": "show", "file_id": None,
+                        "error": f"Could not resolve file: {args.file}"})
+        log.error("Could not resolve file: %s", args.file)
+        return 2
+    txt = (rec or {}).get("transcript_txt_path")
+    if not rec or not txt or not Path(txt).exists():
+        msg = "No transcript yet — process the file first."
+        if _as_json:
+            _emit_json({"ok": False, "command": "show",
+                        "file_id": (rec or {}).get("id"), "error": msg})
+        log.error(msg)
+        return 2
+    content = Path(txt).read_text(encoding="utf-8")
+    if _as_json:
+        _emit_json({"ok": True, "command": "show", "file_id": rec["id"],
+                    "transcript_txt_path": txt, "content": content,
+                    "speakers": _speakers_payload(rec["id"])})
+    else:
+        print(content)
+    return 0
+
+
+def run_status(args) -> int:
+    """Report a file's processing state. Useful for polling a background run:
+    the pipeline updates the DB status per stage (extracting → transcribing →
+    diarizing → labeled → done)."""
+    init_db()
+    _as_json = getattr(args, "json", False)
+    abs_path, rec = _resolve_and_record(args)
+    if not abs_path:
+        if _as_json:
+            _emit_json({"ok": False, "command": "status", "file_id": None,
+                        "error": f"Could not resolve file: {args.file}"})
+        log.error("Could not resolve file: %s", args.file)
+        return 2
+    if not rec:
+        if _as_json:
+            _emit_json({"ok": True, "command": "status", "file_id": None,
+                        "source_path": abs_path, "status": "unprocessed",
+                        "transcript_txt_path": None, "speakers": []})
+        else:
+            print("unprocessed")
+        return 0
+    payload = {
+        "ok": True, "command": "status", "file_id": rec["id"],
+        "source_path": abs_path, "status": rec["status"],
+        "error_message": rec.get("error_message"),
+        "audio_path": rec.get("audio_path"),
+        "transcript_txt_path": rec.get("transcript_txt_path"),
+        "speakers": _speakers_payload(rec["id"]),
+    }
+    if _as_json:
+        _emit_json(payload)
+    else:
+        print(f"{rec['status']}  (file_id={rec['id']})")
+    return 0
+
+
+_CONFIG_KEYS = ("home_folder", "destination_folder", "hf_token")
+
+
+def _mask_setting(key: str, val):
+    if val and key == "hf_token":
+        return (val[:4] + "…" + val[-4:]) if len(val) > 8 else "set"
+    return val
+
+
+def run_config(args) -> int:
+    """Get or set app settings: home_folder, destination_folder, hf_token."""
+    init_db()
+    _as_json = getattr(args, "json", False)
+    if args.action == "set":
+        if not args.key or args.value is None:
+            log.error("Usage: meeting-ninja config set <key> <value>")
+            return 2
+        db.set_setting(args.key, args.value)
+        shown = _mask_setting(args.key, args.value)
+        if _as_json:
+            _emit_json({"ok": True, "command": "config", "action": "set",
+                        "key": args.key, "value": shown})
+        else:
+            print(f"set {args.key} = {shown}")
+        return 0
+    # get
+    if args.key:
+        val = db.get_setting(args.key)
+        if _as_json:
+            _emit_json({"ok": True, "command": "config", "action": "get",
+                        "key": args.key, "value": _mask_setting(args.key, val)})
+        else:
+            print(_mask_setting(args.key, val) if val is not None else "")
+        return 0
+    settings = {k: _mask_setting(k, db.get_setting(k)) for k in _CONFIG_KEYS}
+    if _as_json:
+        _emit_json({"ok": True, "command": "config", "action": "get", "settings": settings})
+    else:
+        for k, v in settings.items():
+            print(f"  {k} = {v if v else '(unset)'}")
+    return 0
+
+
+def run_clean(args) -> int:
+    """Delete regenerable extracted-audio WAVs for already-processed files.
+    The WAVs are intermediates; labeling and re-rendering work from the DB, and
+    reprocessing re-extracts them. Dry run unless --yes is given."""
+    init_db()
+    _as_json = getattr(args, "json", False)
+    targets = []
+    for f in db.get_all_files():
+        ap = f.get("audio_path")
+        if ap and f["status"] in ("done", "labeled") and Path(ap).exists():
+            targets.append((f["id"], ap, Path(ap).stat().st_size))
+    total = sum(s for _, _, s in targets)
+    if not args.yes:
+        if _as_json:
+            _emit_json({"ok": True, "command": "clean", "dry_run": True,
+                        "would_delete": [{"file_id": i, "path": p, "bytes": s}
+                                         for i, p, s in targets],
+                        "total_bytes": total})
+        else:
+            for _, p, s in targets:
+                print(f"  {s/1e6:8.1f} MB  {p}")
+            print(f"\n{len(targets)} files, {total/1e6:.1f} MB. Re-run with --yes to delete.")
+        return 0
+    freed = 0
+    for fid, p, s in targets:
+        try:
+            Path(p).unlink()
+            db.update_file(fid, audio_path=None)
+            freed += s
+        except OSError as e:
+            log.warning("Could not delete %s: %s", p, e)
+    if _as_json:
+        _emit_json({"ok": True, "command": "clean", "dry_run": False,
+                    "deleted": len(targets), "freed_bytes": freed})
+    else:
+        print(f"Deleted {len(targets)} audio files, freed {freed/1e6:.1f} MB.")
+    return 0
+
+
 def main():
     p = argparse.ArgumentParser(description="Meeting transcription pipeline (CLI).")
     sub = p.add_subparsers(dest="command")
@@ -591,6 +794,36 @@ def main():
                     help="Emit a single JSON result object to stdout (logs go to stderr).")
     pl.add_argument("-v", "--verbose", action="store_true", help="Debug logging.")
 
+    # ── list / show / status / config / clean ───────────────────────────────────
+    pls = sub.add_parser("list", help="List recordings under the home folder + status.")
+    pls.add_argument("--home", default=None, help="Folder to scan. Defaults to the saved home folder.")
+    pls.add_argument("--json", action="store_true", help="Emit JSON.")
+    pls.add_argument("-v", "--verbose", action="store_true")
+
+    psh = sub.add_parser("show", help="Print the transcript for a processed file.")
+    psh.add_argument("--file", required=True, help="Path or filename.")
+    psh.add_argument("--home", default=None, help="Folder to search when --file is a bare name.")
+    psh.add_argument("--json", action="store_true", help="Emit JSON (includes content + speakers).")
+    psh.add_argument("-v", "--verbose", action="store_true")
+
+    pst = sub.add_parser("status", help="Report a file's processing state (poll a background run).")
+    pst.add_argument("--file", required=True, help="Path or filename.")
+    pst.add_argument("--home", default=None, help="Folder to search when --file is a bare name.")
+    pst.add_argument("--json", action="store_true", help="Emit JSON.")
+    pst.add_argument("-v", "--verbose", action="store_true")
+
+    pcf = sub.add_parser("config", help="Get or set settings (home_folder, destination_folder, hf_token).")
+    pcf.add_argument("action", choices=["get", "set"])
+    pcf.add_argument("key", nargs="?", default=None)
+    pcf.add_argument("value", nargs="?", default=None)
+    pcf.add_argument("--json", action="store_true", help="Emit JSON.")
+    pcf.add_argument("-v", "--verbose", action="store_true")
+
+    pcl = sub.add_parser("clean", help="Delete regenerable extracted-audio WAVs for processed files.")
+    pcl.add_argument("--yes", action="store_true", help="Actually delete (default is a dry run).")
+    pcl.add_argument("--json", action="store_true", help="Emit JSON.")
+    pcl.add_argument("-v", "--verbose", action="store_true")
+
     args = p.parse_args()
     _setup_logging(getattr(args, "verbose", False))
 
@@ -623,6 +856,17 @@ def main():
                 _list_speakers(rec["id"])
             sys.exit(0)
         sys.exit(run_label(args))
+
+    if args.command == "list":
+        sys.exit(run_list(args))
+    if args.command == "show":
+        sys.exit(run_show(args))
+    if args.command == "status":
+        sys.exit(run_status(args))
+    if args.command == "config":
+        sys.exit(run_config(args))
+    if args.command == "clean":
+        sys.exit(run_clean(args))
 
     # default → process
     if not getattr(args, "file", None):

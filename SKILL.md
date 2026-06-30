@@ -145,6 +145,72 @@ destination copy.
   "destination_copy": null }
 ```
 
+### 4. List recordings and their status
+
+```bash
+meeting-ninja list --json          # everything under the home folder
+meeting-ninja list --home "<dir>" --json
+```
+
+Returns each recording with `status` (`unprocessed`, `done`, `error`, or a
+mid-pipeline stage) and `transcript_txt_path`. Use this instead of `ls` to see
+what is present and what still needs processing.
+
+### 5. Print a transcript
+
+```bash
+meeting-ninja show --file "<path>" --json
+```
+
+Returns `transcript_txt_path`, the full `content`, and `speakers`. Use instead
+of `cat`. Without `--json` it prints the transcript text to stdout.
+
+### 6. Check a file's state
+
+```bash
+meeting-ninja status --file "<path>" --json
+```
+
+Returns the current `status`. Useful for polling a background run (see below).
+
+### 7. Get or set settings
+
+```bash
+meeting-ninja config get --json                       # all settings
+meeting-ninja config set home_folder "<dir>"
+meeting-ninja config set hf_token "<token>"           # enables diarization
+```
+
+Settings: `home_folder`, `destination_folder`, `hf_token`. Use instead of
+editing the SQLite DB directly. The token is masked in output.
+
+### 8. Reclaim space
+
+```bash
+meeting-ninja clean             # dry run: shows reclaimable audio WAVs
+meeting-ninja clean --yes       # delete them
+```
+
+Deletes the extracted-audio WAVs for finished files. They are regenerable
+intermediates; transcripts and labeling are unaffected.
+
+## Long-running jobs
+
+`process` runs synchronously and can take minutes (diarization is the slow
+part). Whisper and pyannote print their own progress to **stderr**; stdout stays
+reserved for the final JSON. To run without blocking, background it and wait for
+the output, or poll `status`:
+
+```bash
+# background, capture JSON to a file, wait for it
+meeting-ninja --file "<path>" --json > /tmp/mn.json 2>/tmp/mn.log &
+until [ -s /tmp/mn.json ]; do sleep 10; done
+cat /tmp/mn.json
+
+# or poll the pipeline stage
+meeting-ninja status --file "<path>" --json   # → extracting / transcribing / diarizing / done
+```
+
 ## Naming outputs with `--description`
 
 When `--description` is set, the derived files are named after the description
