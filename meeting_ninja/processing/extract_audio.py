@@ -25,6 +25,12 @@ def extract_audio(source_path: str, home_folder: str, offset_sec: float = 0.0,
     cmd += [
         "-i", source_path,
         "-vn",
+        # Dynamic loudness normalization evens out level differences between a
+        # loud and a soft speaker (common on phone calls and single-mic rooms),
+        # so a quieter voice doesn't fall below what Whisper transcribes reliably.
+        # dynaudnorm works in moving windows, so it lifts quiet passages without
+        # crushing dynamics; it is speech-safe on already well-balanced audio too.
+        "-af", "dynaudnorm=f=150:g=15:p=0.9:m=25",
         "-ar", "16000",
         "-ac", "1",
         "-c:a", "pcm_s16le",

@@ -24,7 +24,16 @@ def transcribe(audio_path: str, home_folder: str, model_name: str = "base",
     json_path = transcript_dir / f"{stem}.json"
 
     model = whisper.load_model(model_name)
-    transcribe_kwargs = {"verbose": False}
+    transcribe_kwargs = {
+        "verbose": False,
+        # Do NOT feed the previous window's text back into the decoder. On quiet
+        # or low-SNR audio (phone calls, a soft-spoken speaker) that feedback makes
+        # Whisper collapse into a repetition loop ("Yes. Yes. Yes.") and then skip
+        # over real speech. Disabling it trades a little cross-sentence fluency for
+        # far fewer hallucinated loops and dropped segments. Temperature fallback
+        # (Whisper's default 0.0→1.0 ladder) stays on to recover low-confidence spans.
+        "condition_on_previous_text": False,
+    }
     if language and language != "auto":
         transcribe_kwargs["language"] = language
     result = model.transcribe(audio_path, **transcribe_kwargs)
