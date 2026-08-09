@@ -237,6 +237,68 @@ the built-in extension list (e.g. `.opus`, `.wma`, `.m4b`). The tool transcodes
 to a WAV internally when needed. Files with no decodable audio are rejected with
 exit code `2`.
 
+## Reviewing for artifacts
+
+Whisper and pyannote are strong but not perfect. After `process` (and `label`),
+read the whole transcript once and look for two kinds of error before treating
+it as final. Reading end to end matters: both error types read as fluent, so
+skimming misses them.
+
+**Transcription (word) errors.** Whisper substitutes a plausible-sounding word
+when it is unsure, so mistakes look like ordinary text. They cluster around:
+
+- proper nouns — people, companies, products, place names, especially
+  non-English ones;
+- domain, brand, and technical terms or acronyms the model has not seen;
+- fast, quiet, overlapping, or accented speech.
+
+Tell-tale signs: a real word that makes no sense in context, a non-word, or the
+*same* term rendered several different ways across the file (three spellings of
+one product name almost always mean one real term). Use the transcript's own
+internal consistency to spot and confirm these.
+
+**Speaker (diarization) errors.**
+
+- *Turn-boundary bleed* — at a hand-off, one speaker's label swallows the first
+  few words of the other's turn. Inspect the moments just after a speaker change.
+- *Misattributed backchannels* — short "yeah" / "right" / "exactly" interjections
+  assigned to the wrong person.
+- *Leftover labels* — segments pyannote could not place stay as `UNKNOWN`, and it
+  sometimes over-splits into an extra `SPEAKER_NN`. Decide per segment; some are
+  genuinely ambiguous.
+
+Cross-check with content: if a line contradicts who the label says is speaking
+(one speaker narrating the other's biography, say), it is a bleed or a swap.
+
+## Correcting artifacts
+
+Fix by confidence, and never invent:
+
+- **High confidence** — context makes the true word or speaker unambiguous. Edit
+  the transcript `.txt` directly: correct the word, or change the speaker name on
+  the line.
+- **Low confidence** — a name or term you cannot verify from context. Do *not*
+  guess. Mark it inline with a visible flag such as `[misheard-word?]` so the
+  uncertainty survives, and raise it with the user.
+
+**Let the audio settle ambiguous spots.** Each leading `[M:SS]` / `[H:MM:SS]`
+timestamp maps into the extracted WAV at `audio_path`. Cut a short clip around it
+with a couple of seconds of lead-in and share it (or ask the user to listen),
+then apply the confirmed words:
+
+```bash
+# a line at [3:17] -> 197s; grab 194s..206s with lead-in
+ffmpeg -y -ss 194 -t 12 -i "<audio_path>" "clip_3m17s.mp3"
+```
+
+Two things to remember:
+
+- Manual `.txt` edits are the **last** step. Re-running `process` or `label`
+  regenerates the transcript from the raw model output and overwrites hand edits;
+  redo them if you re-run.
+- If the transcript was copied elsewhere (a `--tag` destination, or a manual
+  copy), re-copy it after correcting so every location matches.
+
 ## Typical agent workflow
 
 1. Run `process` with an absolute `--file` and `--json`. Add `--description` if
@@ -246,6 +308,10 @@ exit code `2`.
 4. If the user wants named speakers: run `label --list` to see the labels and
    samples, infer or ask for names, then run `label` with `--speaker`
    assignments, and re-read `transcript_txt_path`.
+5. Read the finished transcript once for artifacts — word mishearings and
+   speaker-attribution errors. Fix high-confidence ones in the `.txt`, flag
+   uncertain ones with a `[?]` marker, and confirm against the audio. See
+   "Reviewing for artifacts" and "Correcting artifacts".
 
 ## Notes
 
